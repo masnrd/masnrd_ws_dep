@@ -1,4 +1,10 @@
-# Overall Drone System
+# masnrd_ws
+
+A ROS workspace for the overall drone system. This uses ROS2's rolling release.
+- Under `src`, you will see the three ROS2 projects (excluding PX4 messages):
+    - `central_interface`: The central ROS2 node that acts as the drone's brain.
+    - `pathfinder`: The pathfinder ROS2 node (in Python) that conducts pathfinding.
+    - `masnrd_msgs`: The customised messages used by the central interface and the pathfinder to communicate with each other.
 
 ## Installation
 If the ROS2 distribution hasn't been initialised before, do so:
@@ -42,5 +48,9 @@ MicroXRCEAgent udp4 -p 8888
 Having initialised the environment, run the central interface node and the pathfinder node on a third terminal:
 ```bash
 ros2 run central_interface central_interface
+```
+
+```bash
+ros2 run pathfinder pathfinder
 ```
 
