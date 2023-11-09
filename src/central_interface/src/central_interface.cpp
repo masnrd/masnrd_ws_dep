@@ -117,9 +117,15 @@ CentralNode::CentralNode() : Node("central_node")
 
         // std::cout << "Position: " << pos.x << "," << pos.y << std::endl;
 
-        // If we've reached the tgt, then we can report.
-        if (operating)
-            process_pos();
+        // Process the position to see if we've reached it.
+        if (abs(pos.x - tgt.position[0]) > tolerance || abs(pos.y - tgt.position[1]) > tolerance)
+            return;
+        if (!operating) return;
+
+        // If we've reached the target, report it.
+        pub_reached();
+        log("Reached target.");
+        operating = false; 
     });
     // 2.2. Subscriber to GOTO position updates from pathfinder
     gotowp_sub = this->create_subscription<GotoWaypoint>("/pathfinder/out/goto_waypoint", 10, [this](const GotoWaypoint::UniquePtr msg) {
@@ -169,9 +175,12 @@ void CentralNode::process_pos() {
         return;
     if (abs(pos.y - tgt.position[1]) > tolerance)
         return;
+    if (!operating)
+        return;
     
     // If we've reached the target, report in.
-    log("Reached target.");
+    // log("Reached target.");
+    std::cout << "Position is (" << pos.x << "," << pos.y << "), reached (" << tgt.position[0] << "," << tgt.position[1] << ")" << std::endl;
     pub_reached();
     operating = false;
 }
