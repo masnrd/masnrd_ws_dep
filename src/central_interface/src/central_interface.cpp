@@ -46,7 +46,13 @@ class CentralNode : public rclcpp::Node
     Point pos; // current X/Y
     float alt; // current altitude
 
+    // Trajectory Setting
+    Point startPt;
+    Point endPt;
+    uint64_t trajStartTime;
+
     TrajectorySetpoint tgt; // target point
+    bool initialised; // if drone has initialised
     bool operating; // if the drone is in operation
     
     // Closeness to target (in metres) to which the drone considers itself as having "reached" the target
@@ -97,8 +103,14 @@ CentralNode::CentralNode() : Node("central_node")
     pos = Point(0, 0, 0, 0);
     alt = 0;
     operating = false;
+    initialised = false;
+
+    startPt = Point(0, 0, 0, 0);
+    endPt = Point(0, 0, 0, 0);
+    trajStartTime = 0; 
     tgt = TrajectorySetpoint{}; // Setpoint message to be sent
     tgt.position = {0.0, 0.0, -targetAlt};
+    tgt.velocity = {0.0, 0.0, 0.0};
 
     // Setup Subscriber
     // 1. QOS Setup (ROS2-PX4 interfacing issues)
@@ -114,27 +126,59 @@ CentralNode::CentralNode() : Node("central_node")
         pos.ref_lat = msg->ref_lat;
         pos.ref_lon = msg->ref_lon;
         alt = -msg->z;
-
-        // std::cout << "Position: " << pos.x << "," << pos.y << std::endl;
-
-        // Process the position to see if we've reached it.
-        if (abs(pos.x - tgt.position[0]) > tolerance || abs(pos.y - tgt.position[1]) > tolerance)
-            return;
+        if (!initialised) return;
         if (!operating) return;
 
-        // If we've reached the target, report it.
-        pub_reached();
-        log("Reached target.");
-        operating = false; 
+        // Compute the displacement from the tgt
+        float disp_x = endPt.x - pos.x;
+        float disp_y = endPt.y - pos.y;
+
+        // Process to see if we've reached the position
+        if (abs(disp_x) <= tolerance && abs(disp_y) <= tolerance) {
+            pub_reached();
+            log("Reached target.");
+            operating = false;
+            return;
+        } else {
+            std::cout << "disp = (" << disp_x << "," << disp_y << ")" << std::endl;
+        }
+
+        // Otherwise, recompute the trajectory setpoint
+        rcl_time_point_value_t T = float(10 / scanSpeed) * pow(10, 6);
+        rcl_time_point_value_t t = (msg->timestamp - trajStartTime);
+        if (t > T) {
+            // If we failed to reach the point in time, reset to start of trajectory startpoint.
+            trajStartTime = msg->timestamp;
+        }
+
+        tgt.position = {
+            ((t * endPt.x) + ((T - t) * startPt.x)) / T,
+            ((t * endPt.y) + ((T - t) * startPt.y)) / T,
+            -targetAlt,
+        };
+        float T_s = T / pow(10, 6);
+        tgt.velocity = {
+            scanSpeed * (endPt.x - startPt.x)/T_s,
+            scanSpeed * (endPt.y - startPt.y)/T_s,
+            0,
+        };
+        std::cout << "tgt.position=(" << tgt.position[0] << "," << tgt.position[1] << ")" << std::endl;
+
+        //tgt.position = {endPt.x + ((T - t) * startPt.x), endPt.y + ((T - t) * startPt.y), -targetAlt};
     });
     // 2.2. Subscriber to GOTO position updates from pathfinder
     gotowp_sub = this->create_subscription<GotoWaypoint>("/pathfinder/out/goto_waypoint", 10, [this](const GotoWaypoint::UniquePtr msg) {
         // Update target
         //TODO: take timestamp into account?
         //TODO: validate no change in reference point?
+        if (!initialised) {
+            endPt = Point(msg->x, msg->y, pos.ref_lat, pos.ref_lon);
+            initialised = true;
+        }
         log("Received instruction");
+        trajStartTime = msg->timestamp;
         set_target(Point(msg->x, msg->y, pos.ref_lat, pos.ref_lon));
-        std::cout << "Goto: " << tgt.position[0] << "," << tgt.position[1] << std::endl;
+        std::cout << "Goto: " << endPt.x << "," << endPt.y << std::endl;
     });
 
     // Setup Publishers
@@ -170,7 +214,7 @@ CentralNode::CentralNode() : Node("central_node")
     timer_ = this->create_wall_timer(pubIntv, timer_callback);
 }
 
-void CentralNode::process_pos() {
+void CentralNode::process_pos() { // UNUSED
     if (abs(pos.x - tgt.position[0]) > tolerance)
         return;
     if (abs(pos.y - tgt.position[1]) > tolerance)
@@ -187,7 +231,8 @@ void CentralNode::process_pos() {
 
 void CentralNode::set_target(const Point pt) {
     operating = false;
-    tgt.position = {pt.x, pt.y, -targetAlt};
+    startPt = endPt;
+    endPt = Point(pt.x, pt.y, endPt.ref_lat, endPt.ref_lon);
     operating = true;
 }
 
@@ -208,8 +253,8 @@ void CentralNode::disarm() {
 void CentralNode::pub_reached() {
     ReachedWaypoint rwp{};
     std::cout << "Reached: " << tgt.position[0] << "," << tgt.position[1] << std::endl;
-    rwp.x = tgt.position[0]; rwp.y = tgt.position[1];
-    rwp.ref_lat = pos.ref_lat; rwp.ref_lon = pos.ref_lon;
+    rwp.x = endPt.x; rwp.y = endPt.y;
+    rwp.ref_lat = endPt.ref_lat; rwp.ref_lon = endPt.ref_lon;
     rwp.timestamp = this->get_clock()->now().nanoseconds() / 1000;
     reachedwp_pub->publish(rwp);
 }
